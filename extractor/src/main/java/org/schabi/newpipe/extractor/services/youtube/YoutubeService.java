@@ -39,13 +39,23 @@ import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExt
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeSubscriptionExtractor;
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeSuggestionExtractor;
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeTrendingExtractor;
+import org.schabi.newpipe.extractor.services.youtube.extractors.kiosk.YoutubeLiveExtractor;
+import org.schabi.newpipe.extractor.services.youtube.extractors.kiosk.YoutubeTrendingGamingVideosExtractor;
+import org.schabi.newpipe.extractor.services.youtube.extractors.kiosk.YoutubeTrendingMoviesAndShowsTrailersExtractor;
+import org.schabi.newpipe.extractor.services.youtube.extractors.kiosk.YoutubeTrendingMusicExtractor;
+import org.schabi.newpipe.extractor.services.youtube.extractors.kiosk.YoutubeTrendingPodcastsEpisodesExtractor;
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeChannelLinkHandlerFactory;
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeChannelTabLinkHandlerFactory;
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeCommentsLinkHandlerFactory;
+import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeLiveLinkHandlerFactory;
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubePlaylistLinkHandlerFactory;
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory;
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeStreamLinkHandlerFactory;
+import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeTrendingGamingVideosLinkHandlerFactory;
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeTrendingLinkHandlerFactory;
+import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeTrendingMoviesAndShowsTrailersLinkHandlerFactory;
+import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeTrendingMusicLinkHandlerFactory;
+import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeTrendingPodcastsEpisodesLinkHandlerFactory;
 import org.schabi.newpipe.extractor.stream.StreamExtractor;
 import org.schabi.newpipe.extractor.stream.StreamType;
 import org.schabi.newpipe.extractor.subscription.SubscriptionExtractor;
@@ -161,18 +171,68 @@ public class YoutubeService extends StreamingService {
     public KioskList getKioskList() throws ExtractionException {
         final KioskList list = new KioskList(this);
 
-        // add kiosks here e.g.:
+        final ListLinkHandlerFactory liveLHF = YoutubeLiveLinkHandlerFactory.INSTANCE;
+        final ListLinkHandlerFactory podcastsLHF =
+                YoutubeTrendingPodcastsEpisodesLinkHandlerFactory.INSTANCE;
+        final ListLinkHandlerFactory gamingLHF =
+                YoutubeTrendingGamingVideosLinkHandlerFactory.INSTANCE;
+        final ListLinkHandlerFactory moviesAndShowsLHF =
+                YoutubeTrendingMoviesAndShowsTrailersLinkHandlerFactory.INSTANCE;
+        final ListLinkHandlerFactory musicLHF = YoutubeTrendingMusicLinkHandlerFactory.INSTANCE;
+        final ListLinkHandlerFactory trendingLHF = new YoutubeTrendingLinkHandlerFactory();
+
         try {
+            list.addKioskEntry(
+                    (streamingService, url, id) -> new YoutubeLiveExtractor(
+                            YoutubeService.this,
+                            liveLHF.fromUrl(url),
+                            id),
+                    liveLHF,
+                    YoutubeLiveLinkHandlerFactory.KIOSK_ID
+            );
+            list.addKioskEntry(
+                    (streamingService, url, id) -> new YoutubeTrendingPodcastsEpisodesExtractor(
+                            YoutubeService.this,
+                            podcastsLHF.fromUrl(url),
+                            id),
+                    podcastsLHF,
+                    YoutubeTrendingPodcastsEpisodesLinkHandlerFactory.KIOSK_ID
+            );
+            list.addKioskEntry(
+                    (streamingService, url, id) -> new YoutubeTrendingGamingVideosExtractor(
+                            YoutubeService.this,
+                            gamingLHF.fromUrl(url),
+                            id),
+                    gamingLHF,
+                    YoutubeTrendingGamingVideosLinkHandlerFactory.KIOSK_ID
+            );
+            list.addKioskEntry(
+                    (streamingService, url, id) ->
+                            new YoutubeTrendingMoviesAndShowsTrailersExtractor(
+                                    YoutubeService.this,
+                                    moviesAndShowsLHF.fromUrl(url),
+                                    id),
+                    moviesAndShowsLHF,
+                    YoutubeTrendingMoviesAndShowsTrailersLinkHandlerFactory.KIOSK_ID
+            );
+            list.addKioskEntry(
+                    (streamingService, url, id) -> new YoutubeTrendingMusicExtractor(
+                            YoutubeService.this,
+                            musicLHF.fromUrl(url),
+                            id),
+                    musicLHF,
+                    YoutubeTrendingMusicLinkHandlerFactory.KIOSK_ID
+            );
             list.addKioskEntry(
                     (streamingService, url, id) -> new YoutubeTrendingExtractor(
                             YoutubeService.this,
-                            new YoutubeTrendingLinkHandlerFactory().fromUrl(url),
+                            trendingLHF.fromUrl(url),
                             id
                     ),
-                    new YoutubeTrendingLinkHandlerFactory(),
-                    "Recommended Lives"
+                    trendingLHF,
+                    "Trending"
             );
-            list.setDefaultKiosk("Recommended Lives");
+            list.setDefaultKiosk(YoutubeLiveLinkHandlerFactory.KIOSK_ID);
         } catch (final Exception e) {
             throw new ExtractionException(e);
         }

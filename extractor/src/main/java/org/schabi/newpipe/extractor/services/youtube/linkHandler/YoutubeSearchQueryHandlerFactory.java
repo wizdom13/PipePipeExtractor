@@ -1,6 +1,7 @@
 package org.schabi.newpipe.extractor.services.youtube.linkHandler;
 
 import org.schabi.newpipe.extractor.search.filter.Filter;
+import org.schabi.newpipe.extractor.search.filter.FilterGroup;
 import org.schabi.newpipe.extractor.search.filter.FilterItem;
 import org.schabi.newpipe.extractor.services.youtube.search.filter.YoutubeFilters;
 
@@ -9,6 +10,7 @@ import org.schabi.newpipe.extractor.linkhandler.SearchQueryHandlerFactory;
 
 import javax.annotation.Nonnull;
 
+import java.util.Collections;
 import java.util.List;
 
 public final class YoutubeSearchQueryHandlerFactory extends SearchQueryHandlerFactory {
@@ -47,9 +49,30 @@ public final class YoutubeSearchQueryHandlerFactory extends SearchQueryHandlerFa
     public String getUrl(final String searchString,
                          @Nonnull final List<FilterItem> selectedContentFilter,
                          final List<FilterItem> selectedSortFilter) throws ParsingException {
-        searchFilters.setSelectedContentFilter(selectedContentFilter);
+        searchFilters.setSelectedContentFilter(resolveSelectedContentFilter(selectedContentFilter));
         searchFilters.setSelectedSortFilter(selectedSortFilter);
         return searchFilters.evaluateSelectedFilters(searchString);
+    }
+
+    @Nonnull
+    private List<FilterItem> resolveSelectedContentFilter(
+            final List<FilterItem> selectedContentFilter) {
+        if (selectedContentFilter != null && !selectedContentFilter.isEmpty()) {
+            return selectedContentFilter;
+        }
+
+        final Filter availableContentFilter = searchFilters.getContentFilters();
+        if (availableContentFilter == null) {
+            return Collections.emptyList();
+        }
+
+        for (final FilterGroup group : availableContentFilter.getFilterGroups()) {
+            if (group.filterItems != null && group.filterItems.length > 0) {
+                return Collections.singletonList(group.filterItems[0]);
+            }
+        }
+
+        return Collections.emptyList();
     }
 
     @Override

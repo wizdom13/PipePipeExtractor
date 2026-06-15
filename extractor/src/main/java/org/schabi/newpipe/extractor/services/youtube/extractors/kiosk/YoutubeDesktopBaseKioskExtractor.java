@@ -61,8 +61,8 @@ abstract class YoutubeDesktopBaseKioskExtractor extends KioskExtractor<StreamInf
     public String getName() throws ParsingException {
         return YoutubeChannelHelper.getChannelName(
                 YoutubeChannelHelper.getChannelHeader(responseData.jsonResponse),
-                null,
-                responseData.jsonResponse);
+                responseData.jsonResponse,
+                YoutubeChannelHelper.getChannelAgeGateRenderer(responseData.jsonResponse));
     }
 
     @Nonnull

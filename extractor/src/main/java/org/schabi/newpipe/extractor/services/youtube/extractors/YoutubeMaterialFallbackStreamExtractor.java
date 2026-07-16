@@ -1,29 +1,209 @@
 package org.schabi.newpipe.extractor.services.youtube.extractors;
 
+import com.grack.nanojson.JsonArray;
+import com.grack.nanojson.JsonObject;
+import com.grack.nanojson.JsonWriter;
+
+import org.jsoup.Jsoup;
 import org.schabi.newpipe.extractor.Image;
 import org.schabi.newpipe.extractor.StreamingService;
+import org.schabi.newpipe.extractor.downloader.Downloader;
+import org.schabi.newpipe.extractor.downloader.Response;
+import org.schabi.newpipe.extractor.exceptions.ExtractionException;
 import org.schabi.newpipe.extractor.exceptions.ParsingException;
 import org.schabi.newpipe.extractor.linkhandler.LinkHandler;
+import org.schabi.newpipe.extractor.localization.ContentCountry;
+import org.schabi.newpipe.extractor.localization.Localization;
 import org.schabi.newpipe.extractor.services.youtube.WatchDataCache;
+import org.schabi.newpipe.extractor.stream.Description;
+import org.schabi.newpipe.extractor.utils.JsonUtils;
 
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import static org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.getJsonPostResponse;
+import static org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.getValidJsonResponseBody;
+import static org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.getWebPlayerResponseSync;
+import static org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.prepareDesktopJsonBuilder;
+
 /**
  * App-facing YouTube stream extractor fallbacks used by NewPipe Material.
- *
- * <p>The base StreamExtractor default for sub-channel avatars can expose the sub-channel page URL
- * as if it were an image URL. The Material detail page passes getSubChannelAvatars() directly to
- * Coil, so return a real avatar image from the channel page instead.</p>
  */
 public class YoutubeMaterialFallbackStreamExtractor extends YoutubeRelatedFallbackStreamExtractor {
+    private static final int MAX_DESCRIPTION_SCAN_DEPTH = 40;
+
     public YoutubeMaterialFallbackStreamExtractor(final StreamingService service,
-                                                  final LinkHandler linkHandler,
-                                                  final WatchDataCache watchDataCache) {
+                                                   final LinkHandler linkHandler,
+                                                   final WatchDataCache watchDataCache) {
         super(service, linkHandler, watchDataCache);
+    }
+
+    @Override
+    public void onFetchPage(@Nonnull final Downloader downloader)
+            throws IOException, ExtractionException {
+        super.onFetchPage(downloader);
+
+        if (getPrivateJsonObject("nextResponse") == null) {
+            final Localization localization = new Localization("en");
+            final ContentCountry contentCountry = getExtractorContentCountry();
+            final byte[] body = JsonWriter.string(
+                            prepareDesktopJsonBuilder(localization, contentCountry)
+                                    .value("videoId", getId())
+                                    .value("contentCheckOk", true)
+                                    .value("racyCheckOk", true)
+                                    .done())
+                    .getBytes(StandardCharsets.UTF_8);
+            final JsonObject recoveredNextResponse = getJsonPostResponse(
+                    "next", body, localization);
+            setPrivateJsonObject("nextResponse", recoveredNextResponse);
+        }
+    }
+
+    @Nonnull
+    @Override
+    public Description getDescription() throws ParsingException {
+        ParsingException originalError = null;
+        Description originalDescription = null;
+        try {
+            originalDescription = super.getDescription();
+            if (hasVisibleText(originalDescription)) {
+                return originalDescription;
+            }
+        } catch (final ParsingException error) {
+            originalError = error;
+        }
+
+        final String attributedDescription = findAttributedDescriptionContent();
+        if (hasVisibleText(attributedDescription)) {
+            return new Description(attributedDescription, Description.PLAIN_TEXT);
+        }
+
+        final String webDescription = fetchWebPlayerDescription();
+        if (hasVisibleText(webDescription)) {
+            return new Description(webDescription, Description.PLAIN_TEXT);
+        }
+
+        if (originalDescription != null) {
+            return originalDescription;
+        }
+        if (originalError != null) {
+            throw originalError;
+        }
+        return Description.EMPTY_DESCRIPTION;
+    }
+
+    private boolean hasVisibleText(@Nullable final Description description) {
+        if (description == null || description.getContent() == null) {
+            return false;
+        }
+
+        final String content = description.getType() == Description.HTML
+                ? Jsoup.parse(description.getContent()).text()
+                : description.getContent();
+        return hasVisibleText(content);
+    }
+
+    private boolean hasVisibleText(@Nullable final String content) {
+        return content != null && !content.trim().isEmpty();
+    }
+
+    @Nullable
+    private String fetchWebPlayerDescription() {
+        try {
+            final Response response = getWebPlayerResponseSync(getId());
+            final JsonObject webPlayerResponse = JsonUtils.toJsonObject(
+                    getValidJsonResponseBody(response));
+            final String shortDescription = webPlayerResponse
+                    .getObject("videoDetails")
+                    .getString("shortDescription", "");
+            if (hasVisibleText(shortDescription)) {
+                return shortDescription;
+            }
+
+            return scanForAttributedDescription(webPlayerResponse, 0);
+        } catch (final Exception ignored) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private String findAttributedDescriptionContent() {
+        final String playerDescription = scanForAttributedDescription(playerResponse, 0);
+        if (hasVisibleText(playerDescription)) {
+            return playerDescription;
+        }
+
+        final String secondaryDescription = scanForAttributedDescription(
+                getPrivateJsonObject("videoSecondaryInfoRenderer"), 0);
+        if (hasVisibleText(secondaryDescription)) {
+            return secondaryDescription;
+        }
+
+        return scanForAttributedDescription(getPrivateJsonObject("nextResponse"), 0);
+    }
+
+    @Nullable
+    private JsonObject getPrivateJsonObject(final String fieldName) {
+        try {
+            final Field field = YoutubeStreamExtractor.class.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return (JsonObject) field.get(this);
+        } catch (final Exception ignored) {
+            return null;
+        }
+    }
+
+    private void setPrivateJsonObject(final String fieldName, @Nonnull final JsonObject value)
+            throws ExtractionException {
+        try {
+            final Field field = YoutubeStreamExtractor.class.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(this, value);
+        } catch (final ReflectiveOperationException error) {
+            throw new ExtractionException("Could not restore YouTube " + fieldName, error);
+        }
+    }
+
+    @Nullable
+    private String scanForAttributedDescription(@Nullable final Object value, final int depth) {
+        if (value == null || depth > MAX_DESCRIPTION_SCAN_DEPTH) {
+            return null;
+        }
+
+        if (value instanceof JsonObject) {
+            final JsonObject object = (JsonObject) value;
+            final JsonObject attributedDescription = object.getObject("attributedDescription");
+            if (attributedDescription != null && !attributedDescription.isEmpty()) {
+                final String content = attributedDescription.getString("content", "");
+                if (hasVisibleText(content)) {
+                    return content;
+                }
+            }
+
+            for (final Map.Entry<String, Object> entry : object.entrySet()) {
+                final String description = scanForAttributedDescription(
+                        entry.getValue(), depth + 1);
+                if (hasVisibleText(description)) {
+                    return description;
+                }
+            }
+        } else if (value instanceof JsonArray) {
+            for (final Object child : (JsonArray) value) {
+                final String description = scanForAttributedDescription(child, depth + 1);
+                if (hasVisibleText(description)) {
+                    return description;
+                }
+            }
+        }
+
+        return null;
     }
 
     @Nonnull

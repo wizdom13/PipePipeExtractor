@@ -30,8 +30,8 @@ import org.schabi.newpipe.extractor.search.SearchExtractor;
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeChannelExtractor;
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeChannelTabExtractor;
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeCommentsExtractor;
+import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeDiagnosticStreamExtractor;
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeFeedExtractor;
-import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeMaterialFallbackStreamExtractor;
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeMixPlaylistExtractor;
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeMusicSearchExtractor;
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubePlaylistExtractor;
@@ -123,7 +123,7 @@ public class YoutubeService extends StreamingService {
 
     @Override
     public StreamExtractor getStreamExtractor(final LinkHandler linkHandler) {
-        return new YoutubeMaterialFallbackStreamExtractor(this, linkHandler, watchDataCache);
+        return new YoutubeDiagnosticStreamExtractor(this, linkHandler, watchDataCache);
     }
 
     @Override

@@ -77,6 +77,11 @@ public class YoutubeStreamExtractor extends StreamExtractor {
     public JsonObject playerResponse;
     private JsonObject nextResponse;
 
+    private JsonObject androidPlayerResponse;
+    private JsonObject iosPlayerResponse;
+    private JsonObject safariPlayerResponse;
+    private JsonObject tvHtml5EmbedPlayerResponse;
+
     @Nullable
     private JsonObject androidStreamingData;
     @Nullable
@@ -804,6 +809,7 @@ public class YoutubeStreamExtractor extends StreamExtractor {
             java.util.stream.Stream.of(
                     new Pair<>(safariStreamingData, safariCpn),
                     new Pair<>(androidStreamingData, androidCpn),
+                    new Pair<>(iosStreamingData, iosCpn),
                     new Pair<>(tvHtml5SimplyEmbedStreamingData, tvHtml5SimplyEmbedCpn)
             )
                     .flatMap(pair -> getStreamsFromStreamingDataKey(videoId, pair.getFirst(),
@@ -816,6 +822,7 @@ public class YoutubeStreamExtractor extends StreamExtractor {
             java.util.stream.Stream.of(
                     new Pair<>(safariStreamingData, safariCpn),
                     new Pair<>(androidStreamingData, androidCpn),
+                    new Pair<>(iosStreamingData, iosCpn),
                     new Pair<>(tvHtml5SimplyEmbedStreamingData, tvHtml5SimplyEmbedCpn)
             )
                     .flatMap(pair -> getStreamsFromStreamingDataKey(videoId, pair.getFirst(),
@@ -828,6 +835,7 @@ public class YoutubeStreamExtractor extends StreamExtractor {
             java.util.stream.Stream.of(
                     new Pair<>(safariStreamingData, safariCpn),
                     new Pair<>(androidStreamingData, androidCpn),
+                    new Pair<>(iosStreamingData, iosCpn),
                     new Pair<>(tvHtml5SimplyEmbedStreamingData, tvHtml5SimplyEmbedCpn)
             )
                     .flatMap(pair -> getStreamsFromStreamingDataKey(videoId, pair.getFirst(),
@@ -1312,18 +1320,28 @@ public class YoutubeStreamExtractor extends StreamExtractor {
         final ContentCountry contentCountry = getExtractorContentCountry();
 
         errors.clear();
+        playerResponse = null;
+        androidPlayerResponse = null;
+        iosPlayerResponse = null;
+        safariPlayerResponse = null;
+        tvHtml5EmbedPlayerResponse = null;
+        androidStreamingData = null;
+        iosStreamingData = null;
+        safariStreamingData = null;
+        webStreamingData = null;
+        tvHtml5SimplyEmbedStreamingData = null;
+        playerCaptionsTracklistRenderer = null;
+        streamType = null;
 
         CancellableCall webPageCall = YoutubeParsingHelper.getWebPlayerResponse(
                 localization, contentCountry, videoId, this);
 
-        CancellableCall androidCall = null;
-        CancellableCall safariCall = null;
-
-            if (StringUtils.isBlank(ServiceList.YouTube.getTokens())) {
-                androidCall = fetchAndroidVRJsonPlayer(contentCountry, localization, videoId);
-            } else {
-                safariCall = fetchSafariJsonPlayer(contentCountry, localization, videoId);
-            }
+        CancellableCall primaryCall;
+        if (StringUtils.isBlank(ServiceList.YouTube.getTokens())) {
+            primaryCall = fetchAndroidVRJsonPlayer(contentCountry, localization, videoId);
+        } else {
+            primaryCall = tryFetchSafariJsonPlayer(contentCountry, localization, videoId);
+        }
 
         final byte[] body = JsonWriter.string(
                 prepareDesktopJsonBuilder(localization, contentCountry)
@@ -1359,29 +1377,36 @@ public class YoutubeStreamExtractor extends StreamExtractor {
                     }
                 });
             }
-            long startTime = System.nanoTime();
-            do {
-                if (((StringUtils.isBlank(ServiceList.YouTube.getTokens()) && androidCall.isFinished())
-                        || (StringUtils.isNotBlank(ServiceList.YouTube.getTokens()) && safariCall.isFinished())) &&
-                        webPageCall.isFinished() && nextDataCall.isFinished()) {
-                    break;
-                }
-            } while (TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startTime) <= ServiceList.YouTube.getLoadingTimeout());
+            waitForCallsToFinish(webPageCall, nextDataCall, primaryCall);
 
-            if (StringUtils.isBlank(ServiceList.YouTube.getTokens()) && androidStreamingData == null) {
-                safariCall = fetchSafariJsonPlayer(contentCountry, localization, videoId);
-                startTime = System.nanoTime();
-                do {
-                    if (safariCall.isFinished()) {
-                        break;
-                    }
-                } while (TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startTime) <= ServiceList.YouTube.getLoadingTimeout());
+            boolean playableResponseSelected = selectPlayablePlayerResponse(videoId);
+
+            if (!playableResponseSelected) {
+                final CancellableCall iosCall = fetchIosMobileJsonPlayer(contentCountry,
+                        localization, videoId);
+                waitForCallsToFinish(iosCall);
+                playableResponseSelected = selectPlayablePlayerResponse(videoId);
             }
 
-            if (((StringUtils.isBlank(ServiceList.YouTube.getTokens()) && androidStreamingData == null
-                    && safariStreamingData == null)
-                    || ((StringUtils.isNotBlank(ServiceList.YouTube.getTokens()) && safariStreamingData == null)))
-                    || nextResponse == null) {
+            if (StringUtils.isBlank(ServiceList.YouTube.getTokens()) && !playableResponseSelected) {
+                final CancellableCall safariCall = tryFetchSafariJsonPlayer(
+                        contentCountry, localization, videoId);
+                waitForCallsToFinish(safariCall);
+                playableResponseSelected = selectPlayablePlayerResponse(videoId);
+            }
+
+            if (!playableResponseSelected) {
+                final CancellableCall tvHtml5Call = tryFetchTvHtml5EmbedJsonPlayer(
+                        contentCountry, localization, videoId);
+                waitForCallsToFinish(tvHtml5Call);
+                playableResponseSelected = selectPlayablePlayerResponse(videoId);
+            }
+
+            if (!playableResponseSelected) {
+                selectPrimaryErrorResponse(videoId);
+            }
+
+            if (playerResponse == null || nextResponse == null) {
                 for (Throwable e: errors) {
                     if (e instanceof AntiBotException) {
                         throw (AntiBotException) e;
@@ -1409,10 +1434,80 @@ public class YoutubeStreamExtractor extends StreamExtractor {
         }
     }
 
+    private void waitForCallsToFinish(@Nonnull final CancellableCall... calls) {
+        final long startTime = System.nanoTime();
+        do {
+            if (Arrays.stream(calls).allMatch(call -> call == null || call.isFinished())) {
+                return;
+            }
+        } while (TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startTime)
+                <= ServiceList.YouTube.getLoadingTimeout());
+    }
+
+    private boolean selectPlayablePlayerResponse(@Nonnull final String videoId) {
+        // Keep the authoritative response deterministic: prefer the Android response used for
+        // playback upstream, then deliberate playback fallbacks. WEB is fetched for metadata by
+        // YoutubeParsingHelper and must not replace playback state with a temporary reload error.
+        for (final JsonObject response : Arrays.asList(androidPlayerResponse, safariPlayerResponse,
+                iosPlayerResponse, tvHtml5EmbedPlayerResponse)) {
+            if (response == null || isPlayerResponseNotValid(response, videoId)) {
+                continue;
+            }
+            final JsonObject playabilityStatus = response.getObject("playabilityStatus");
+            final String status = playabilityStatus.getString("status");
+            if ((status == null || status.equalsIgnoreCase("ok"))
+                    && hasUsablePlaybackData(response)) {
+                playerResponse = response;
+                if (isNullOrEmpty(playerCaptionsTracklistRenderer)) {
+                    playerCaptionsTracklistRenderer = response.getObject("captions")
+                            .getObject("playerCaptionsTracklistRenderer");
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasUsablePlaybackData(@Nonnull final JsonObject response) {
+        final JsonObject streamingData = response.getObject(STREAMING_DATA);
+        if (streamingData == null || streamingData.isEmpty()) {
+            return false;
+        }
+        return hasUsableFormats(streamingData.getArray(FORMATS))
+                || hasUsableFormats(streamingData.getArray(ADAPTIVE_FORMATS))
+                || !isNullOrEmpty(streamingData.getString("hlsManifestUrl"))
+                || !isNullOrEmpty(streamingData.getString("dashManifestUrl"));
+    }
+
+    private boolean hasUsableFormats(@Nullable final JsonArray formats) {
+        if (formats == null || formats.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < formats.size(); i++) {
+            final JsonObject format = formats.getObject(i);
+            if (format.has("url") || format.has(SIGNATURE_CIPHER) || format.has(CIPHER)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void selectPrimaryErrorResponse(@Nonnull final String videoId) {
+        // If no playable response exists after all deliberate fallbacks, report the primary
+        // client's genuine playability error through the existing checkPlayabilityStatus logic.
+        for (final JsonObject response : Arrays.asList(androidPlayerResponse, safariPlayerResponse,
+                iosPlayerResponse, tvHtml5EmbedPlayerResponse)) {
+            if (response != null && !isPlayerResponseNotValid(response, videoId)) {
+                playerResponse = response;
+                return;
+            }
+        }
+    }
+
     private boolean isSabrOnlyResponse() {
         for (final JsonObject sd : Arrays.asList(
                 safariStreamingData, androidStreamingData,
-                webStreamingData, tvHtml5SimplyEmbedStreamingData)) {
+                iosStreamingData, webStreamingData, tvHtml5SimplyEmbedStreamingData)) {
             if (sd == null) {
                 continue;
             }
@@ -1544,12 +1639,10 @@ public class YoutubeStreamExtractor extends StreamExtractor {
             @Override
             public void onSuccess(Response response) throws ExtractionException {
                 try {
-                    final JsonObject androidPlayerResponse = JsonUtils.toJsonObject(getValidJsonResponseBody(response));
+                    androidPlayerResponse = JsonUtils.toJsonObject(getValidJsonResponseBody(response));
                     if (isPlayerResponseNotValid(androidPlayerResponse, videoId)) {
                         return;
                     }
-
-                    YoutubeStreamExtractor.this.playerResponse = androidPlayerResponse;
 
                     final JsonObject streamingData = androidPlayerResponse.getObject(STREAMING_DATA);
                     if (!isNullOrEmpty(streamingData)) {
@@ -1593,15 +1686,13 @@ public class YoutubeStreamExtractor extends StreamExtractor {
             @Override
             public void onSuccess(Response response) throws ExtractionException {
                 try {
-                    JsonObject iosPlayerResponse = JsonUtils.toJsonObject(getValidJsonResponseBody(response));
+                    iosPlayerResponse = JsonUtils.toJsonObject(getValidJsonResponseBody(response));
                     if (isPlayerResponseNotValid(iosPlayerResponse, videoId)) {
                         if (iosPlayerResponse.toString().contains("Sign in to confirm")) {
                             throw new AntiBotException("IOS player response is not valid");
                         }
                         throw new ExtractionException("IOS player response is not valid");
                     }
-
-                    YoutubeStreamExtractor.this.playerResponse = iosPlayerResponse;
 
                     final JsonObject streamingData = iosPlayerResponse.getObject(STREAMING_DATA);
                     if (!isNullOrEmpty(streamingData)) {
@@ -1649,8 +1740,6 @@ public class YoutubeStreamExtractor extends StreamExtractor {
                         throw new ExtractionException("Web player response is not valid");
                     }
 
-                    YoutubeStreamExtractor.this.playerResponse = webPlayerResponse;
-
                     final JsonObject streamingData = webPlayerResponse.getObject(STREAMING_DATA);
                     if (!isNullOrEmpty(streamingData)) {
                         webStreamingData = streamingData;
@@ -1672,6 +1761,21 @@ public class YoutubeStreamExtractor extends StreamExtractor {
                         webCpn), localization, callback);
     }
 
+    @Nullable
+    private CancellableCall tryFetchTvHtml5EmbedJsonPlayer(
+            @Nonnull final ContentCountry contentCountry,
+            @Nonnull final Localization localization,
+            @Nonnull final String videoId) throws IOException, ExtractionException {
+        try {
+            YoutubeJavaScriptPlayerManager.getSignatureTimestamp(videoId);
+        } catch (final ParsingException e) {
+            errors.add(new ParsingException(
+                    "Skipping TVHTML5 fallback: player metadata unavailable", e));
+            return null;
+        }
+        return fetchTvHtml5EmbedJsonPlayer(contentCountry, localization, videoId);
+    }
+
     private CancellableCall fetchTvHtml5EmbedJsonPlayer(@Nonnull final ContentCountry contentCountry,
                                                         @Nonnull final Localization localization,
                                                         @Nonnull final String videoId)
@@ -1681,7 +1785,6 @@ public class YoutubeStreamExtractor extends StreamExtractor {
         final Downloader.AsyncCallback callback = new Downloader.AsyncCallback() {
             @Override
             public void onSuccess(Response response) {
-                JsonObject tvHtml5EmbedPlayerResponse = null;
                 try {
                     tvHtml5EmbedPlayerResponse = JsonUtils.toJsonObject(getValidJsonResponseBody(response));
                     if (isPlayerResponseNotValid(tvHtml5EmbedPlayerResponse, videoId)) {
@@ -1690,8 +1793,6 @@ public class YoutubeStreamExtractor extends StreamExtractor {
                         }
                         throw new ExtractionException("TVHTML5 embed player response is not valid");
                     }
-
-                    YoutubeStreamExtractor.this.playerResponse = tvHtml5EmbedPlayerResponse;
 
                     final JsonObject streamingData = tvHtml5EmbedPlayerResponse.getObject(STREAMING_DATA);
                     if (!isNullOrEmpty(streamingData)) {
@@ -1714,6 +1815,21 @@ public class YoutubeStreamExtractor extends StreamExtractor {
                         tvHtml5SimplyEmbedCpn), localization, callback);
     }
 
+    @Nullable
+    private CancellableCall tryFetchSafariJsonPlayer(
+            @Nonnull final ContentCountry contentCountry,
+            @Nonnull final Localization localization,
+            @Nonnull final String videoId) throws IOException, ExtractionException {
+        try {
+            YoutubeJavaScriptPlayerManager.getSignatureTimestamp(videoId);
+        } catch (final ParsingException e) {
+            errors.add(new ParsingException(
+                    "Skipping Safari fallback: player metadata unavailable", e));
+            return null;
+        }
+        return fetchSafariJsonPlayer(contentCountry, localization, videoId);
+    }
+
     private CancellableCall fetchSafariJsonPlayer(@Nonnull final ContentCountry contentCountry,
                                                   @Nonnull final Localization localization,
                                                   @Nonnull final String videoId)
@@ -1724,15 +1840,13 @@ public class YoutubeStreamExtractor extends StreamExtractor {
             @Override
             public void onSuccess(Response response) {
                 try {
-                    final JsonObject safariPlayerResponse = JsonUtils.toJsonObject(getValidJsonResponseBody(response));
+                    safariPlayerResponse = JsonUtils.toJsonObject(getValidJsonResponseBody(response));
                     if (isPlayerResponseNotValid(safariPlayerResponse, videoId)) {
                         if (safariPlayerResponse.toString().contains("Sign in to confirm")) {
                             throw new AntiBotException("Safari player response is not valid");
                         }
                         throw new ExtractionException("Safari player response is not valid");
                     }
-
-                    YoutubeStreamExtractor.this.playerResponse = safariPlayerResponse;
 
                     final JsonObject streamingData = safariPlayerResponse.getObject(STREAMING_DATA);
                     if (!isNullOrEmpty(streamingData)) {
@@ -1856,6 +1970,7 @@ public class YoutubeStreamExtractor extends StreamExtractor {
                      */
                     new Pair<>(safariStreamingData, safariCpn),
                     new Pair<>(androidStreamingData, androidCpn),
+                    new Pair<>(iosStreamingData, iosCpn),
                     new Pair<>(tvHtml5SimplyEmbedStreamingData, tvHtml5SimplyEmbedCpn)
 
             )

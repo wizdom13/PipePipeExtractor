@@ -39,7 +39,6 @@ import static org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
  */
 public class YoutubeMaterialFallbackStreamExtractor extends YoutubeRelatedFallbackStreamExtractor {
     private static final int MAX_DESCRIPTION_SCAN_DEPTH = 40;
-
     public YoutubeMaterialFallbackStreamExtractor(final StreamingService service,
                                                    final LinkHandler linkHandler,
                                                    final WatchDataCache watchDataCache) {

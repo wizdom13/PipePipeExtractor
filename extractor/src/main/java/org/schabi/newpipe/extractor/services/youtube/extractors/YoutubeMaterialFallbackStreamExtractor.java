@@ -21,6 +21,7 @@ import org.schabi.newpipe.extractor.utils.JsonUtils;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -204,6 +205,89 @@ public class YoutubeMaterialFallbackStreamExtractor extends YoutubeRelatedFallba
         }
 
         return null;
+    }
+
+    @Nonnull
+    @Override
+    public List<Image> getUploaderAvatars() throws ParsingException {
+        final JsonArray sources = getUploaderAvatarSources();
+        if (sources == null || sources.isEmpty()) {
+            return super.getUploaderAvatars();
+        }
+
+        final List<Image> images = new ArrayList<>(sources.size());
+        for (final Object sourceValue : sources) {
+            if (!(sourceValue instanceof JsonObject)) {
+                continue;
+            }
+
+            final JsonObject source = (JsonObject) sourceValue;
+            final String url = source.getString("url", "");
+            if (url.isEmpty()) {
+                continue;
+            }
+
+            final int width = source.getInt("width", Image.WIDTH_UNKNOWN);
+            final int height = source.getInt("height", Image.HEIGHT_UNKNOWN);
+            images.add(new Image(url, height, width, Image.ResolutionLevel.fromHeight(height)));
+        }
+
+        return images.isEmpty() ? super.getUploaderAvatars() : images;
+    }
+
+    @Nonnull
+    @Override
+    public String getUploaderAvatarUrl() throws ParsingException {
+        return super.getUploaderAvatarUrl();
+    }
+
+    @Nullable
+    private JsonArray getUploaderAvatarSources() {
+        final JsonObject nextResponse = getPrivateJsonObject("nextResponse");
+        if (nextResponse == null) {
+            return null;
+        }
+
+        final JsonObject owner = findVideoSecondaryInfoRenderer(nextResponse)
+                .getObject("owner")
+                .getObject("videoOwnerRenderer");
+        if (owner.isEmpty()) {
+            return null;
+        }
+
+        if (owner.has("avatarStack")) {
+            return owner.getObject("avatarStack")
+                    .getObject("avatarStackViewModel")
+                    .getArray("avatars")
+                    .getObject(0)
+                    .getObject("avatarViewModel")
+                    .getObject("image")
+                    .getArray("sources");
+        }
+
+        return owner.getObject("thumbnail").getArray("thumbnails");
+    }
+
+    @Nonnull
+    private JsonObject findVideoSecondaryInfoRenderer(@Nonnull final JsonObject nextResponse) {
+        final JsonArray contents = nextResponse.getObject("contents")
+                .getObject("twoColumnWatchNextResults")
+                .getObject("results")
+                .getObject("results")
+                .getArray("contents");
+        if (contents == null) {
+            return new JsonObject();
+        }
+
+        for (final Object contentValue : contents) {
+            if (contentValue instanceof JsonObject) {
+                final JsonObject content = (JsonObject) contentValue;
+                if (content.has("videoSecondaryInfoRenderer")) {
+                    return content.getObject("videoSecondaryInfoRenderer");
+                }
+            }
+        }
+        return new JsonObject();
     }
 
     @Nonnull
